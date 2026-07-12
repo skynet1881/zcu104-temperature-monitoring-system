@@ -2,7 +2,32 @@
 ZCU104 temperature monitoring system - this version treats the EEPROM as read only configuration storage.  
 System reads EEPROM and decides which hardware version is being used.  
 
-## Runtim flow
+## How to create workspace and build the project
+From xilinx tools repository, run following scripts in order to create workspace and build the project.
+```bash
+https://github.com/skynet1881/xilinx-dev-tools
+```
+
+Example usage for scripts:
+```bash
+chmod +x scripts/setup.sh
+chmod +x scripts/build.sh
+
+# setup script usage
+./scripts/setup.sh <path_to_xsa> <path_to_workspace> <path_to_application_src <path_to_application_include>  
+
+# exp: setup workspace and build
+./scripts/setup.sh \
+    xsa/design_1_wrapper.xsa \
+    build/vitis_workspace \
+    application/src \
+    application/include
+
+# build workspace
+./scripts/build.sh build/vitis_workspace
+```
+
+## Runtime flow
 
 1. Init GPIO
 2. Init EEPROM interface
