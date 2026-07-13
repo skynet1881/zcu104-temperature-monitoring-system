@@ -1,39 +1,37 @@
 #ifndef GPIO_DRIVER_H
 #define GPIO_DRIVER_H
 
-#include <stdbool.h>
-#include <stdint.h>
+#include "system_types.h"
+#include "xgpio.h"
+#include "xil_types.h"
 
 typedef enum
 {
     GPIO_DRIVER_SUCCESS = 0,
-    GPIO_DRIVER_NOT_INITIALIZED,
     GPIO_DRIVER_INVALID_ARGUMENT,
-    GPIO_DRIVER_INITIALIZATION_ERROR
+    GPIO_DRIVER_INITIALIZATION_ERROR,
+    GPIO_DRIVER_INVALID_STATE
 } GpioDriverStatus;
 
 typedef struct
 {
-    uint16_t device_id;
-    unsigned int channel;
-    uint32_t output_mask;
-    uint32_t green_led_mask;
-    uint32_t yellow_led_mask;
-    uint32_t red_led_mask;
-} GpioDriverConfig;
+    XGpio instance;
+    u32 channel;
+} GpioDriver;
 
-GpioDriverStatus GpioDriver_Init(
-    const GpioDriverConfig *config);
+GpioDriverStatus GpioDriver_Initialize(
+    GpioDriver *driver,
+    u16 device_id,
+    u32 channel);
 
-bool GpioDriver_IsInitialized(void);
+GpioDriverStatus GpioDriver_ShowTemperatureState(
+    GpioDriver *driver,
+    TemperatureState state);
 
-GpioDriverStatus GpioDriver_SetLedPattern(
-    uint32_t pattern);
+void GpioDriver_ShowError(
+    GpioDriver *driver);
 
-GpioDriverStatus GpioDriver_ShowTemperature(
-    int32_t temperature_x10);
+void GpioDriver_AllOff(
+    GpioDriver *driver);
 
-GpioDriverStatus GpioDriver_ShowError(void);
-GpioDriverStatus GpioDriver_AllOff(void);
-
-#endif /* GPIO_DRIVER_H */
+#endif

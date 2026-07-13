@@ -1,5 +1,4 @@
 #include "system_manager.h"
-
 #include "xil_printf.h"
 
 int main(void)
@@ -7,20 +6,36 @@ int main(void)
     SystemManagerStatus status;
 
     xil_printf("\r\n");
-    xil_printf("ZCU104 temperature monitor starting\r\n");
+    xil_printf("ZCU104 Temperature Monitoring System\r\n");
+    xil_printf("------------------------------------\r\n");
 
-    status = SystemManager_Init();
+    // Init the system manager, which initializes the drivers and reads the configuration from EEPROM.
+    status = SystemManager_Initialize();
 
     if (status != SYSTEM_MANAGER_SUCCESS)
     {
         xil_printf(
-            "Fatal system initialization error: %d\r\n",
+            "System initialization failed: %d\r\n",
             (int)status);
 
-        return -1;
+        return (int)status;
     }
 
-    SystemManager_Run();
+    for (;;)
+    {
+        status = SystemManager_Process();
+
+        if (status != SYSTEM_MANAGER_SUCCESS)
+        {
+            /*
+             * Do not print from the ISR. Runtime errors are reported here
+             * from normal execution context.
+             */
+            xil_printf(
+                "System processing error: %d\r\n",
+                (int)status);
+        }
+    }
 
     return 0;
 }

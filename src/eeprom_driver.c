@@ -1,221 +1,207 @@
 #include "eeprom_driver.h"
-
 #include <stddef.h>
-#include <string.h>
 
-#include "xiicps.h"
+#include "system_config.h"
 #include "xstatus.h"
 
-#define EEPROM_DRIVER_MAX_ADDRESS_BYTES 2U
+#define EEPROM_ADDRESS_SIZE_BYTES  2U
+#define EEPROM_BUS_TIMEOUT_LOOPS   1000000U
 
-static XIicPs eeprom_i2c_instance;
-static EepromDriverConfig eeprom_config;
-static bool eeprom_driver_initialized;
-
-static EepromDriverStatus EepromDriver_EncodeAddress(
-    uint32_t address,
-    uint8_t *buffer)
+static EepromDriverStatus EepromDriver_WaitUntilBusIdle(
+    EepromDriver *driver)
 {
-    if (buffer == NULL)
+    u32 timeout = EEPROM_BUS_TIMEOUT_LOOPS;
+
+    while (XIicPs_BusIsBusy(&driver->instance) != 0)
     {
-        return EEPROM_DRIVER_INVALID_ARGUMENT;
+        if (timeout == 0U)
+        {
+            return EEPROM_DRIVER_BUS_BUSY_TIMEOUT;
+        }
+
+        timeout--;
     }
 
-    if (eeprom_config.address_bytes == 1U)
-    {
-        buffer[0] = (uint8_t)(address & 0xFFU);
-        return EEPROM_DRIVER_SUCCESS;
-    }
-
-    if (eeprom_config.address_bytes == 2U)
-    {
-        buffer[0] = (uint8_t)((address >> 8U) & 0xFFU);
-        buffer[1] = (uint8_t)(address & 0xFFU);
-        return EEPROM_DRIVER_SUCCESS;
-    }
-
-    return EEPROM_DRIVER_CONFIGURATION_ERROR;
+    return EEPROM_DRIVER_SUCCESS;
 }
 
-EepromDriverStatus EepromDriver_Init(
-    const EepromDriverConfig *config)
+static EepromDriverStatus EepromDriver_ReadBytes(
+    EepromDriver *driver,
+    u16 memory_address,
+    u8 *data,
+    u32 length)
 {
-    XIicPs_Config *i2c_configuration;
-    int status;
+    u8 address_bytes[EEPROM_ADDRESS_SIZE_BYTES];
+    s32 status;
+    EepromDriverStatus wait_status;
 
-    if (config == NULL)
+    if ((driver == NULL) || (data == NULL) || (length == 0U))
     {
         return EEPROM_DRIVER_INVALID_ARGUMENT;
     }
 
-    if ((config->serial_clock_hz == 0U) ||
-        (config->address_bytes == 0U) ||
-        (config->address_bytes > EEPROM_DRIVER_MAX_ADDRESS_BYTES) ||
-        (config->serial_number_length == 0U) ||
-        (config->serial_number_length >
-            EEPROM_DRIVER_MAX_SERIAL_LENGTH))
+    wait_status = EepromDriver_WaitUntilBusIdle(driver);
+    if (wait_status != EEPROM_DRIVER_SUCCESS)
     {
-        return EEPROM_DRIVER_CONFIGURATION_ERROR;
+        return wait_status;
     }
 
-    eeprom_driver_initialized = false;
-    eeprom_config = *config;
+    address_bytes[0] = (u8)((memory_address >> 8U) & 0xFFU);
+    address_bytes[1] = (u8)(memory_address & 0xFFU);
 
-    i2c_configuration = XIicPs_LookupConfig(
-        config->i2c_device_id);
+    /*
+     * Hold the bus after sending the EEPROM memory address so the following
+     * receive operation uses a repeated START.
+     */
+    XIicPs_SetOptions(
+        &driver->instance,
+        XIICPS_REP_START_OPTION);
 
-    if (i2c_configuration == NULL)
+    status = XIicPs_MasterSendPolled(
+        &driver->instance,
+        address_bytes,
+        EEPROM_ADDRESS_SIZE_BYTES,
+        driver->slave_address);
+
+    if (status != XST_SUCCESS)
     {
-        return EEPROM_DRIVER_CONFIGURATION_ERROR;
+        XIicPs_ClearOptions(
+            &driver->instance,
+            XIICPS_REP_START_OPTION);
+
+        return EEPROM_DRIVER_ADDRESS_SEND_ERROR;
+    }
+
+    status = XIicPs_MasterRecvPolled(
+        &driver->instance,
+        data,
+        length,
+        driver->slave_address);
+
+    XIicPs_ClearOptions(
+        &driver->instance,
+        XIICPS_REP_START_OPTION);
+
+    if (status != XST_SUCCESS)
+    {
+        return EEPROM_DRIVER_READ_ERROR;
+    }
+
+    return EepromDriver_WaitUntilBusIdle(driver);
+}
+
+static char EepromDriver_SanitizeSerialCharacter(u8 value)
+{
+    if ((value >= (u8)' ') && (value <= (u8)'~'))
+    {
+        return (char)value;
+    }
+
+    return '?';
+}
+
+EepromDriverStatus EepromDriver_Initialize(
+    EepromDriver *driver,
+    u16 device_id,
+    u16 slave_address,
+    u32 serial_clock_hz)
+{
+    XIicPs_Config *configuration;
+    s32 status;
+
+    if (driver == NULL)
+    {
+        return EEPROM_DRIVER_INVALID_ARGUMENT;
+    }
+
+    configuration = XIicPs_LookupConfig(device_id);
+    if (configuration == NULL)
+    {
+        return EEPROM_DRIVER_LOOKUP_ERROR;
     }
 
     status = XIicPs_CfgInitialize(
-        &eeprom_i2c_instance,
-        i2c_configuration,
-        i2c_configuration->BaseAddress);
+        &driver->instance,
+        configuration,
+        configuration->BaseAddress);
 
     if (status != XST_SUCCESS)
     {
         return EEPROM_DRIVER_INITIALIZATION_ERROR;
     }
 
-    status = XIicPs_SelfTest(&eeprom_i2c_instance);
+    status = XIicPs_SetSClk(
+        &driver->instance,
+        serial_clock_hz);
 
     if (status != XST_SUCCESS)
     {
-        return EEPROM_DRIVER_SELF_TEST_FAILED;
+        return EEPROM_DRIVER_CLOCK_ERROR;
     }
 
-    XIicPs_SetSClk(
-        &eeprom_i2c_instance,
-        config->serial_clock_hz);
-
-    eeprom_driver_initialized = true;
-
-    return EEPROM_DRIVER_SUCCESS;
-}
-
-bool EepromDriver_IsInitialized(void)
-{
-    return eeprom_driver_initialized;
-}
-
-EepromDriverStatus EepromDriver_Read(
-    uint32_t address,
-    uint8_t *data,
-    uint32_t length)
-{
-    uint8_t address_buffer[EEPROM_DRIVER_MAX_ADDRESS_BYTES];
-    EepromDriverStatus encode_status;
-    int status;
-
-    if (!eeprom_driver_initialized)
-    {
-        return EEPROM_DRIVER_NOT_INITIALIZED;
-    }
-
-    if ((data == NULL) || (length == 0U))
-    {
-        return EEPROM_DRIVER_INVALID_ARGUMENT;
-    }
-
-    encode_status = EepromDriver_EncodeAddress(
-        address,
-        address_buffer);
-
-    if (encode_status != EEPROM_DRIVER_SUCCESS)
-    {
-        return encode_status;
-    }
-
-    status = XIicPs_MasterSendPolled(
-        &eeprom_i2c_instance,
-        address_buffer,
-        (int)eeprom_config.address_bytes,
-        eeprom_config.slave_address);
-
-    if (status != XST_SUCCESS)
-    {
-        return EEPROM_DRIVER_READ_ERROR;
-    }
-
-    while (XIicPs_BusIsBusy(&eeprom_i2c_instance) != 0)
-    {
-        /* Wait until the EEPROM address transfer has completed. */
-    }
-
-    status = XIicPs_MasterRecvPolled(
-        &eeprom_i2c_instance,
-        data,
-        (int)length,
-        eeprom_config.slave_address);
-
-    if (status != XST_SUCCESS)
-    {
-        return EEPROM_DRIVER_READ_ERROR;
-    }
-
-    while (XIicPs_BusIsBusy(&eeprom_i2c_instance) != 0)
-    {
-        /* Wait until the EEPROM read has completed. */
-    }
+    driver->slave_address = slave_address;
 
     return EEPROM_DRIVER_SUCCESS;
 }
 
 EepromDriverStatus EepromDriver_ReadConfiguration(
-    EepromConfiguration *configuration)
+    EepromDriver *driver,
+    SystemConfiguration *configuration)
 {
-    uint8_t revision_value;
+    u8 revision;
+    u8 serial[SYSTEM_SERIAL_NUMBER_LENGTH];
+    u32 index;
     EepromDriverStatus status;
 
-    if (!eeprom_driver_initialized)
-    {
-        return EEPROM_DRIVER_NOT_INITIALIZED;
-    }
-
-    if (configuration == NULL)
+    if ((driver == NULL) || (configuration == NULL))
     {
         return EEPROM_DRIVER_INVALID_ARGUMENT;
     }
 
-    memset(configuration, 0, sizeof(*configuration));
-
-    status = EepromDriver_Read(
-        eeprom_config.revision_address,
-        &revision_value,
-        sizeof(revision_value));
+    status = EepromDriver_ReadBytes(
+        driver,
+        APP_EEPROM_REVISION_OFFSET,
+        &revision,
+        1U);
 
     if (status != EEPROM_DRIVER_SUCCESS)
     {
         return status;
     }
 
-    if (revision_value == (uint8_t)HARDWARE_REVISION_A)
+    if (revision == (u8)HARDWARE_REVISION_A)
     {
         configuration->hardware_revision = HARDWARE_REVISION_A;
     }
-    else if (revision_value == (uint8_t)HARDWARE_REVISION_B)
+    else if (revision == (u8)HARDWARE_REVISION_B)
     {
         configuration->hardware_revision = HARDWARE_REVISION_B;
     }
     else
     {
-        return EEPROM_DRIVER_INVALID_CONTENT;
+        return EEPROM_DRIVER_INVALID_CONFIGURATION;
     }
 
-    status = EepromDriver_Read(
-        eeprom_config.serial_number_address,
-        (uint8_t *)configuration->serial_number,
-        eeprom_config.serial_number_length);
+    status = EepromDriver_ReadBytes(
+        driver,
+        APP_EEPROM_SERIAL_OFFSET,
+        serial,
+        SYSTEM_SERIAL_NUMBER_LENGTH);
 
     if (status != EEPROM_DRIVER_SUCCESS)
     {
         return status;
     }
 
-    configuration->serial_number[
-        eeprom_config.serial_number_length] = '\0';
+    for (index = 0U;
+         index < SYSTEM_SERIAL_NUMBER_LENGTH;
+         index++)
+    {
+        configuration->serial_number[index] =
+            EepromDriver_SanitizeSerialCharacter(serial[index]);
+    }
+
+    configuration->serial_number[SYSTEM_SERIAL_NUMBER_LENGTH] = '\0';
 
     return EEPROM_DRIVER_SUCCESS;
 }

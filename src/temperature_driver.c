@@ -1,145 +1,155 @@
 #include "temperature_driver.h"
-
 #include <stddef.h>
 
 #include "xil_io.h"
+#include "xstatus.h"
 
-#define TEMPERATURE_REGISTER_RAW_VALUE_OFFSET 0x08U
-#define TEMPERATURE_REGISTER_STATUS_OFFSET    0x0CU
+#define TEMPERATURE_SCALE_OFFSET          0x00U
+#define TEMPERATURE_X10_OFFSET            0x04U
+#define TEMPERATURE_RAW_OFFSET            0x08U
+#define TEMPERATURE_STATUS_OFFSET         0x0CU
 
-/*
- * STATUS[0] indicates that a new sample is available.
- * Writing one to STATUS[0] is expected to clear the pending condition.
- */
-#define TEMPERATURE_STATUS_DATA_READY_MASK (1UL << 0U)
+#define TEMPERATURE_IRQ_PENDING_MASK      0x00000001U
+#define TEMPERATURE_IRQ_ACKNOWLEDGE_MASK  0x00000001U
 
-static uintptr_t temperature_base_address;
-static bool temperature_driver_initialized;
-
-static uint32_t TemperatureDriver_ReadRegister(uint32_t offset)
+static void TemperatureDriver_InterruptHandler(void *callback_reference)
 {
-    return Xil_In32(temperature_base_address + (uintptr_t)offset);
-}
+    TemperatureDriver *driver =
+        (TemperatureDriver *)callback_reference;
 
-static void TemperatureDriver_WriteRegister(
-    uint32_t offset,
-    uint32_t value)
-{
-    Xil_Out32(
-        temperature_base_address + (uintptr_t)offset,
-        value);
-}
-
-TemperatureDriverStatus TemperatureDriver_Init(uintptr_t base_address)
-{
-    TemperatureDriverStatus status;
-
-    if (base_address == (uintptr_t)0U)
+    if (driver == NULL)
     {
-        temperature_base_address = (uintptr_t)0U;
-        temperature_driver_initialized = false;
-        return TEMPERATURE_DRIVER_INVALID_ARGUMENT;
-    }
-
-    temperature_base_address = base_address;
-    temperature_driver_initialized = true;
-
-    status = TemperatureDriver_SelfTest();
-
-    if (status != TEMPERATURE_DRIVER_SUCCESS)
-    {
-        temperature_driver_initialized = false;
-    }
-
-    return status;
-}
-
-bool TemperatureDriver_IsInitialized(void)
-{
-    return temperature_driver_initialized;
-}
-
-TemperatureDriverStatus TemperatureDriver_GetDataReady(bool *is_ready)
-{
-    uint32_t status_register;
-
-    if (!temperature_driver_initialized)
-    {
-        return TEMPERATURE_DRIVER_NOT_INITIALIZED;
-    }
-
-    if (is_ready == NULL)
-    {
-        return TEMPERATURE_DRIVER_INVALID_ARGUMENT;
-    }
-
-    status_register = TemperatureDriver_ReadRegister(
-        TEMPERATURE_REGISTER_STATUS_OFFSET);
-
-    *is_ready =
-        (status_register & TEMPERATURE_STATUS_DATA_READY_MASK) != 0U;
-
-    return TEMPERATURE_DRIVER_SUCCESS;
-}
-
-TemperatureDriverStatus TemperatureDriver_Read(
-    TemperatureSample *sample)
-{
-    uint32_t status_register;
-
-    if (!temperature_driver_initialized)
-    {
-        return TEMPERATURE_DRIVER_NOT_INITIALIZED;
-    }
-
-    if (sample == NULL)
-    {
-        return TEMPERATURE_DRIVER_INVALID_ARGUMENT;
-    }
-
-    status_register = TemperatureDriver_ReadRegister(
-        TEMPERATURE_REGISTER_STATUS_OFFSET);
-
-    if ((status_register & TEMPERATURE_STATUS_DATA_READY_MASK) == 0U)
-    {
-        return TEMPERATURE_DRIVER_DATA_NOT_READY;
-    }
-
-    sample->raw_value = TemperatureDriver_ReadRegister(
-        TEMPERATURE_REGISTER_RAW_VALUE_OFFSET);
-
-    sample->status_register = status_register;
-
-    return TEMPERATURE_DRIVER_SUCCESS;
-}
-
-TemperatureDriverStatus TemperatureDriver_AcknowledgeInterrupt(void)
-{
-    if (!temperature_driver_initialized)
-    {
-        return TEMPERATURE_DRIVER_NOT_INITIALIZED;
-    }
-
-    TemperatureDriver_WriteRegister(
-        TEMPERATURE_REGISTER_STATUS_OFFSET,
-        TEMPERATURE_STATUS_DATA_READY_MASK);
-
-    return TEMPERATURE_DRIVER_SUCCESS;
-}
-
-TemperatureDriverStatus TemperatureDriver_SelfTest(void)
-{
-    if (!temperature_driver_initialized)
-    {
-        return TEMPERATURE_DRIVER_NOT_INITIALIZED;
+        return;
     }
 
     /*
-     * Reading the status register verifies that the AXI interface is
-     * addressable. An AXI decode failure may still cause a processor exception.
+     * The mock IP uses a level triggered interrupt:
+     *   status bit 0 = IRQ pending
+     *   write bit 0 = "1" to clear IRQ
+     *
+     * Clear the hardware source first so the GIC does not immediately
+     * re-enter this ISR.
      */
-    (void)TemperatureDriver_ReadRegister(
-        TEMPERATURE_REGISTER_STATUS_OFFSET);
+    TemperatureDriver_AcknowledgeInterrupt(driver);
+
+    /*
+     * Keep the ISR short. The main context performs AXI reads,
+     * conversion, state evaluation, GPIO updates, and logging.
+     */
+    driver->interrupt_sequence++;
+}
+
+TemperatureDriverStatus TemperatureDriver_Initialize(
+    TemperatureDriver *driver,
+    UINTPTR base_address)
+{
+    if ((driver == NULL) || (base_address == (UINTPTR)0U))
+    {
+        return TEMPERATURE_DRIVER_INVALID_ARGUMENT;
+    }
+
+    driver->base_address = base_address;
+    driver->interrupt_sequence = 0U;
+
+    /* Remove a stale pending interrupt before connecting the GIC. */
+    TemperatureDriver_AcknowledgeInterrupt(driver);
 
     return TEMPERATURE_DRIVER_SUCCESS;
+}
+
+TemperatureDriverStatus TemperatureDriver_ConfigureInterrupt(
+    TemperatureDriver *driver,
+    XScuGic *interrupt_controller,
+    u32 interrupt_id,
+    u8 priority,
+    u8 trigger_type)
+{
+    s32 status;
+
+    if ((driver == NULL) || (interrupt_controller == NULL))
+    {
+        return TEMPERATURE_DRIVER_INVALID_ARGUMENT;
+    }
+
+    XScuGic_SetPriorityTriggerType(
+        interrupt_controller,
+        interrupt_id,
+        priority,
+        trigger_type);
+
+    status = XScuGic_Connect(
+        interrupt_controller,
+        interrupt_id,
+        (Xil_InterruptHandler)TemperatureDriver_InterruptHandler,
+        driver);
+
+    if (status != XST_SUCCESS)
+    {
+        return TEMPERATURE_DRIVER_INTERRUPT_CONNECT_ERROR;
+    }
+
+    /*
+     * Clear once more immediately before enabling, in case the IP generated
+     * a sample while the interrupt controller was being configured.
+     */
+    TemperatureDriver_AcknowledgeInterrupt(driver);
+
+    XScuGic_Enable(
+        interrupt_controller,
+        interrupt_id);
+
+    return TEMPERATURE_DRIVER_SUCCESS;
+}
+
+TemperatureDriverStatus TemperatureDriver_ReadSample(
+    const TemperatureDriver *driver,
+    TemperatureSample *sample)
+{
+    if ((driver == NULL) || (sample == NULL))
+    {
+        return TEMPERATURE_DRIVER_INVALID_ARGUMENT;
+    }
+
+    sample->output_scale = Xil_In32(
+        driver->base_address + TEMPERATURE_SCALE_OFFSET);
+
+    sample->temperature_x10 = (s32)Xil_In32(
+        driver->base_address + TEMPERATURE_X10_OFFSET);
+
+    sample->raw_value = Xil_In32(
+        driver->base_address + TEMPERATURE_RAW_OFFSET);
+
+    sample->status = Xil_In32(
+        driver->base_address + TEMPERATURE_STATUS_OFFSET);
+
+    return TEMPERATURE_DRIVER_SUCCESS;
+}
+
+u32 TemperatureDriver_GetInterruptSequence(
+    const TemperatureDriver *driver)
+{
+    if (driver == NULL)
+    {
+        return 0U;
+    }
+
+    return driver->interrupt_sequence;
+}
+
+void TemperatureDriver_AcknowledgeInterrupt(
+    const TemperatureDriver *driver)
+{
+    if (driver == NULL)
+    {
+        return;
+    }
+
+    Xil_Out32(
+        driver->base_address + TEMPERATURE_STATUS_OFFSET,
+        TEMPERATURE_IRQ_ACKNOWLEDGE_MASK);
+
+    // Read back to ensure the write has completed and the IRQ is cleared.
+    (void)(Xil_In32(
+        driver->base_address + TEMPERATURE_STATUS_OFFSET) &
+        TEMPERATURE_IRQ_PENDING_MASK);
 }
