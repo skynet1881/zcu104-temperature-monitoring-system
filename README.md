@@ -88,8 +88,3 @@ The current BSP provides:
 | PS I2C / XIicPs | `XPAR_XIICPS_0_DEVICE_ID` | `0` |
 | Temperature interrupt | `XPAR_FABRIC_TEMPERATURE_MOCK_0_IRQ_INTR` | `121` |
 
-## Note about the 100 us requirement
-
-This package currently uses polling to keep the implementation simple. For
-very low jitter, the next version should use the already connected temperature
-interrupt and let the system manager process a sample-ready flag set by the ISR.
