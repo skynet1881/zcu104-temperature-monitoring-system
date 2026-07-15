@@ -4,7 +4,7 @@ The software runs as a bare-metal application on the Cortex-R5 processor of the 
 The application reads simulated temperature value from custom temperature mock IP, reads system configuration data from EEPROM and controls four LEDs throgh AXI GPIO peripheral. 
 
 ```mermaid
-Software Architecture
+graph TD
     main --> SystemManager
     SystemManager --> TemperatureMonitor
     SystemManager --> EEPROMManager
