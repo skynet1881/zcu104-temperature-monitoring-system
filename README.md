@@ -88,3 +88,10 @@ The current BSP provides:
 | PS I2C / XIicPs | `XPAR_XIICPS_0_DEVICE_ID` | `0` |
 | Temperature interrupt | `XPAR_FABRIC_TEMPERATURE_MOCK_0_IRQ_INTR` | `121` |
 
+## Documentation
+
+- [System Architecture](docs/architecture.md)
+- [Hardware Architecture](docs/hardware-architecture.md)
+- [Software Architecture](docs/software-architecture.md)
+- [Interrupt Handling](docs/interrupt-handling.md)
+- [Temperature IP Register Map](docs/register-map.md)
