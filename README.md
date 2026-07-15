@@ -90,8 +90,8 @@ The current BSP provides:
 
 ## Documentation
 
-- [System Architecture](docs/architecture.md)
-- [Hardware Architecture](docs/hardware-architecture.md)
-- [Software Architecture](docs/software-architecture.md)
-- [Interrupt Handling](docs/interrupt-handling.md)
-- [Temperature IP Register Map](docs/register-map.md)
+- [System Architecture](doc/architecture.md)
+- [Hardware Architecture](doc/hardware-architecture.md)
+- [Software Architecture](doc/software-architecture.md)
+- [Interrupt Handling](doc/interrupt-handling.md)
+- [Temperature IP Register Map](doc/register-map.md)
