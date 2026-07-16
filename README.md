@@ -2,6 +2,14 @@
 ZCU104 temperature monitoring system - this version treats the EEPROM as read only configuration storage.  
 System reads EEPROM and decides which hardware version is being used.  
 
+## Documentation
+
+- [System Architecture](doc/architecture.md)
+- [Hardware Architecture](doc/hardware-architecture.md)
+- [Software Architecture](doc/software-architecture.md)
+- [Interrupt Handling](doc/interrupt-handling.md)
+- [Temperature IP Register Map](doc/register-map.md)
+
 ## How to create workspace and build the project
 From xilinx tools repository, run following scripts in order to create workspace and build the project.
 ```bash
@@ -87,11 +95,3 @@ The current BSP provides:
 | AXI GPIO device ID | `XPAR_AXI_GPIO_0_DEVICE_ID` | `0` |
 | PS I2C / XIicPs | `XPAR_XIICPS_0_DEVICE_ID` | `0` |
 | Temperature interrupt | `XPAR_FABRIC_TEMPERATURE_MOCK_0_IRQ_INTR` | `121` |
-
-## Documentation
-
-- [System Architecture](doc/architecture.md)
-- [Hardware Architecture](doc/hardware-architecture.md)
-- [Software Architecture](doc/software-architecture.md)
-- [Interrupt Handling](doc/interrupt-handling.md)
-- [Temperature IP Register Map](doc/register-map.md)
