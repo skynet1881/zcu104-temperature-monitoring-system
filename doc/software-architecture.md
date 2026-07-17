@@ -34,3 +34,10 @@ Responsibilities include:
 - Read interrupt status register.
 - Acknowledge interrupt source.
 - Handling temperature update interrupt.
+
+## Runtime Flow
+The runtime flow of the application is as follows:
+1. The application starts and initializes the system manager.
+2. The system manager initializes the temperature monitor, interrupt controller, EEPROM manager, and LED controller.
+3. In each interrupt, sequence value increased and temperature value is read from temperature driver.
+4. The system manager sets GPIO output based on temperature value. 
